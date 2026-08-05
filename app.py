@@ -1,9 +1,8 @@
 import os
+import requests
 from flask import Flask, jsonify, render_template
-from notion_client import Client
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
@@ -11,75 +10,87 @@ app = Flask(__name__)
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 DATABASE_ID = os.getenv("DATABASE_ID")
 
-notion = Client(auth=NOTION_TOKEN)
+HEADERS = {
+    "Authorization": f"Bearer {NOTION_TOKEN}",
+    "Content-Type": "application/json",
+    "Notion-Version": "2022-06-28"
+}
 
-@app.route("/")
+@app.route('/')
 def index():
-    return render_template("index.html")
+    return render_template('index.html')
 
-@app.route("/api/score", methods=["GET"])
-def get_market_score():
+@app.route('/api/score', methods=['GET'])
+def get_macro_score():
     try:
-        # Query the Notion database using the data sources method
-        response = notion.data_sources.query(data_source_id=DATABASE_ID)
-        results = response.get("results", [])
+        url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
+        response = requests.post(url, headers=HEADERS, timeout=5)
         
-        scores = []
+        if response.status_code != 200:
+            print(f"Notion API Error: {response.status_code} - {response.text}")
+            return jsonify({"error": f"Notion API error {response.status_code}", "score": 0.0, "status": "Error"}), 500
+
+        data = response.json()
+        results = data.get("results", [])
+        
+        total_score = 0.0
+        count = 0
+        bias_statuses = []
+
         for page in results:
             props = page.get("properties", {})
             
-            # Look for a score property (adjust column name if yours differs, e.g., 'Score' or 'Sentiment')
-            # Checking multiple potential column naming conventions safely
-            score_val = None
-            for key in ["Score", "score", "Sentiment", "sentiment", "Value", "value"]:
-                if key in props:
-                    prop_data = props[key]
-                    prop_type = prop_data.get("type")
-                    
-                    if prop_type == "number":
-                        score_val = prop_data.get("number")
-                    elif prop_type == "formula":
-                        formula_data = prop_data.get("formula", {})
-                        f_type = formula_data.get("type")
-                        if f_type == "number":
-                            score_val = formula_data.get("number")
-                    elif prop_type == "rollup":
-                        rollup_data = prop_data.get("rollup", {})
-                        r_type = rollup_data.get("type")
-                        if r_type == "number":
-                            score_val = rollup_data.get("number")
-                    break
+            # 1. Fetch and parse Score
+            score_prop = props.get("Score", {})
+            p_type = score_prop.get("type")
             
-            if score_val is not None:
-                scores.append(float(score_val))
+            val = None
+            if p_type == "rollup":
+                val = score_prop.get("rollup", {}).get("number")
+            elif p_type == "number":
+                val = score_prop.get("number")
+            elif p_type == "formula":
+                val = score_prop.get("formula", {}).get("number")
 
-        # Calculate average score or default to neutral (50) if empty
-        if scores:
-            avg_score = sum(scores) / len(scores)
-        else:
-            avg_score = 50.0
+            if val is not None:
+                total_score += float(val)
+                count += 1
 
-        # Categorize sentiment based on score range (0 to 100 scale)
-        if avg_score >= 80:
-            sentiment = "Very Bullish"
-        elif avg_score >= 60:
-            sentiment = "Bullish"
-        elif avg_score >= 40:
-            sentiment = "Neutral"
-        elif avg_score >= 20:
-            sentiment = "Bearish"
-        else:
-            sentiment = "Very Bearish"
+            # 2. Fetch and parse Bias
+            bias_prop = props.get("Bias", {})
+            b_type = bias_prop.get("type")
+            
+            bias_val = None
+            if b_type == "formula":
+                formula_data = bias_prop.get("formula", {})
+                f_sub_type = formula_data.get("type")
+                bias_val = formula_data.get(f_sub_type)
+            elif b_type == "select":
+                select_data = bias_prop.get("select")
+                if select_data:
+                    bias_val = select_data.get("name")
+            elif b_type == "rich_text":
+                texts = bias_prop.get("rich_text", [])
+                bias_val = texts[0]["plain_text"] if texts else None
+            elif b_type == "string":
+                bias_val = bias_prop.get("string")
+
+            if bias_val is not None:
+                bias_statuses.append(str(bias_val))
+
+        score = round(total_score, 4) if count > 0 else 0.0
+        
+        # Strictly use the fetched Notion Bias, or default to "Unknown" if not found
+        status = bias_statuses[0] if bias_statuses else "Unknown"
 
         return jsonify({
-            "score": round(avg_score, 2),
-            "sentiment": sentiment,
-            "total_rows": len(results)
+            "score": score,
+            "status": status
         })
 
     except Exception as e:
-        print(f"Error fetching Notion data: {e}")
-        return jsonify({"error": str(e)}), 500
+        print(f"Server Error: {e}")
+        return jsonify({"error": str(e), "score": 0.0, "status": "Error"}), 500
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     app.run(debug=True, port=5000)
