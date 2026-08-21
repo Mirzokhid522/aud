@@ -54,6 +54,7 @@
             cursor: pointer;
         }
 
+        /* Real score on bottom */
         #statusText {
             font-size: 26px;
             font-weight: bold;
@@ -96,7 +97,7 @@
 
     <script>
         let currentScore = 0;
-        let globalAngle = Math.PI; // Persistent state variable declared globally
+        let globalAngle = Math.PI; 
         let animationFrameId = null;
 
         function renderGauge(score, needleAngleTarget) {
@@ -203,7 +204,7 @@
             ctx.fill();
         }
 
-        // --- Interactivity: Mouse Hover Tooltips ---
+        // --- Interactivity: Mouse Hover Tooltips for AUD ---
         const canvas = document.getElementById('gaugeCanvas');
         const tooltip = document.getElementById('tooltip');
 
@@ -222,7 +223,6 @@
 
                 tooltip.style.opacity = '1';
                 
-                // Updated tooltips matching the 0.5 / 0.1 threshold scheme for AUD
                 if (angle >= Math.PI && angle < Math.PI + 1.22) {
                     tooltip.innerText = "Very Bearish AUD (Score < -0.5)";
                 } else if (angle >= Math.PI + 1.22 && angle < Math.PI + 1.48) {
@@ -248,18 +248,17 @@
                 const response = await fetch('/api/score');
                 const data = await response.json();
                 const score = data.score; 
-                const notionStatus = data.status; // Fetches the live formatted string from Notion
+                const notionStatus = data.status; 
                 currentScore = score;
 
-                const minVal = -0.5;
-                const maxVal = 0.5;
+                const minVal = -0.6;
+                const maxVal = 0.6;
                 let clampedScore = Math.max(minVal, Math.min(maxVal, score));
                 let normalized = (clampedScore - minVal) / (maxVal - minVal);
                 const targetAngle = Math.PI + (normalized * Math.PI);
 
                 if (animationFrameId) cancelAnimationFrame(animationFrameId);
 
-                // HARD RESET: Immediately jump the tracking angle back to the extreme left baseline (Math.PI) before animating up to target
                 globalAngle = Math.PI;
 
                 function animate() {
@@ -274,13 +273,16 @@
                 const headerEl = document.getElementById('headerTitle');
                 const statusEl = document.getElementById('statusText');
                 
-                // Display the score number at the bottom text field
+                // Real score value on bottom container
                 statusEl.innerText = score.toFixed(4);
+                
+                // Percentage calculation
+                let percentage = normalized * 100;
 
-                // Directly assign the text string pulled straight from your Notion Database 'Bias' property
-                headerEl.innerText = notionStatus;
+                // Combine status text and percentage right beside each other in the header
+                headerEl.innerText = `${notionStatus} (${percentage.toFixed(0)}%)`;
 
-                // Dynamically adjust header background color based on the text content
+                // Sync header background color
                 if (notionStatus.includes("Bullish")) {
                     headerEl.style.backgroundColor = "#2f65d8";
                 } else if (notionStatus.includes("Bearish")) {
@@ -291,7 +293,7 @@
 
             } catch (error) {
                 console.error('Error fetching score:', error);
-                document.getElementById('statusText').innerText = 'Error';
+                document.getElementById('headerTitle').innerText = 'Error Loading';
             }
         }
 
